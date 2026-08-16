@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "README.md",
+    "CONTRIBUTING.md",
+    "flake.nix",
+    "src/mcp-rss/src/main.rs",
+    "src/mcp-rss/src/lib.rs"
+  ]
+}
