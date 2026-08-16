@@ -1,0 +1,3 @@
+[[package]]
+name = "mcp-rss"
+changelog_path = "./CHANGELOG.md"
