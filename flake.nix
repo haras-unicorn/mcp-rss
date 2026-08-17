@@ -7,8 +7,7 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
 
-    naersk.url = "github:nix-community/naersk";
-    naersk.inputs.nixpkgs.follows = "nixpkgs";
+    crane.url = "github:ipetkov/crane";
 
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
@@ -19,6 +18,7 @@
       self,
       nixpkgs,
       flake-parts,
+      crane,
       ...
     }@inputs:
     let
@@ -35,36 +35,23 @@
               "rust-src"
             ];
           };
-          rustc = rust;
-          cargo = rust;
 
-          naersk' = pkgs.callPackage inputs.naersk {
-            inherit rustc cargo;
+          craneLib = crane.mkLib pkgs;
+
+          cargoToml = builtins.fromTOML (builtins.readFile "${self}/src/mcp-rss/Cargo.toml");
+
+          commonArgs = {
+            src = craneLib.cleanCargoSource self;
+            strictDeps = true;
+            cargoExtraArgs = "-p mcp-rss";
           };
 
-          unwrapped = naersk'.buildPackage (
-            let
-              cargoToml = builtins.fromTOML (builtins.readFile "${self}/src/mcp-rss/Cargo.toml");
-            in
-            {
-              src = lib.cleanSourceWith {
-                src = self;
-                filter =
-                  path: type:
-                  (lib.hasSuffix ".rs" path)
-                  || (lib.hasSuffix ".toml" path)
-                  || (lib.hasSuffix ".lock" path)
-                  || (type == "directory");
-              };
-              cargoBuildOptions =
-                prev:
-                prev
-                ++ [
-                  "-p"
-                  "mcp-rss"
-                ];
-              name = cargoToml.package.name;
+          unwrapped = craneLib.buildPackage (
+            commonArgs
+            // {
+              pname = cargoToml.package.name;
               version = cargoToml.package.version;
+              cargoArtifacts = craneLib.buildDepsOnly commonArgs;
               meta.mainProgram = "mcp-rss";
             }
           );
@@ -198,10 +185,9 @@
             }
           '';
 
+          packages = makePackages pkgs;
+
           devScript =
-            let
-              packages = makePackages pkgs;
-            in
             pkgs.writeShellApplication {
               name = "dev";
               runtimeInputs = external ++ [ packages.rust ];
@@ -210,15 +196,18 @@
         in
         {
           devShells =
-            let
-              packages = makePackages pkgs;
-            in
             {
               default = pkgs.mkShell {
                 packages = external ++ [
                   packages.rust
                   devScript
                 ];
+                shellHook = ''
+                  # Create a symlink to the vendored dependencies in the dev shell
+                  if [ -d "${packages.unwrapped}/cargo-vendor" ]; then
+                    ln -sf "${packages.unwrapped}/cargo-vendor" .cargo/vendor
+                  fi
+                '';
               };
             };
 

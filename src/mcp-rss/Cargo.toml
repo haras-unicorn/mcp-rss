@@ -10,7 +10,11 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json", "gzip"] }
 rmcp = { version = "3.1.2", features = ["transport-io"] }
+rss = "2"
+scraper = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
