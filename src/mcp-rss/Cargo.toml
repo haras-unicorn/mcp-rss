@@ -8,6 +8,9 @@ license-file = "../../LICENSE.md"
 readme = "../../README.md"
 edition = "2024"
 
+[package.metadata.crane]
+pname = "mcp-rss"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

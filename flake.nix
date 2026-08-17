@@ -49,7 +49,7 @@
           unwrapped = craneLib.buildPackage (
             commonArgs
             // {
-              pname = cargoToml.package.name;
+              pname = cargoToml.metadata.crane.pname;
               version = cargoToml.package.version;
               cargoArtifacts = craneLib.buildDepsOnly commonArgs;
               meta.mainProgram = "mcp-rss";
