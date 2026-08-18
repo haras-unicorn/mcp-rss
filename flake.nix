@@ -40,11 +40,9 @@
 
           env = {
             PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
-
           };
 
           nativeBuildInputs = with pkgs; [
-
             pkg-config
             openssl
           ];
