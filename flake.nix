@@ -46,6 +46,8 @@
             cargoExtraArgs = "-p mcp-rss";
           };
 
+          vendorDir = craneLib.cargoVendorDir commonArgs;
+
           unwrapped = craneLib.buildPackage (
             commonArgs
             // {
@@ -202,9 +204,7 @@
                 ];
                 shellHook = ''
                   # Create a symlink to the vendored dependencies in the dev shell
-                  if [ -d "${packages.unwrapped}/cargo-vendor" ]; then
-                    ln -sf "${packages.unwrapped}/cargo-vendor" .cargo/vendor
-                  fi
+                  ln -sf "${vendorDir}" .cargo/vendor
                 '';
               };
             };

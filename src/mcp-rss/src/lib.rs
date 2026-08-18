@@ -184,3 +184,22 @@ fn strip_html(html: &str) -> String {
     .collect::<Vec<_>>()
     .join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_strip_html() {
+    let input = "<p>Hello <b>world</b></p>";
+    let output = strip_html(input);
+    assert_eq!(output, "Hello\nworld");
+  }
+
+  #[test]
+  fn test_strip_html_complex() {
+    let input = "<div class=\"article\"><h1>Title</h1><p>Some text with <a href=\"#\">links</a> and <span>spans</span>.</p></div>";
+    let output = strip_html(input);
+    assert_eq!(output, "Title\nSome text with links and spans.");
+  }
+}
