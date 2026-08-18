@@ -11,7 +11,7 @@
 #![deny(clippy::todo)]
 #![deny(clippy::allow_attributes_without_reason)]
 
-use rmcp::{tool_router, Model};
+use rmcp::{Model, tool, tool_router};
 use scraper::{Html, Selector};
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ impl Default for RssServer {
 ///
 /// Returns a list of article URLs (links) from the specified feeds.
 /// If `time_from` is provided, only articles published after that ISO 8601 timestamp are included.
-#[tool_router::tool(
+#[tool(
   description = "Get article URLs from RSS/Atom feeds, optionally filtered by publication date"
 )]
 async fn get_articles(
@@ -113,13 +113,10 @@ async fn get_articles(
 /// Fetch the content of a single article from a URL.
 ///
 /// Returns cleaned text content extracted from the HTML page.
-#[tool_router::tool(
+#[tool(
   description = "Fetch and clean the text content of a single article from a URL"
 )]
-async fn fetch_article(
-  &self,
-  url: String,
-) -> Result<String, String> {
+async fn fetch_article(&self, url: String) -> Result<String, String> {
   let html = match self.http.get(&url).send().await {
     Ok(resp) => match resp.text().await {
       Ok(text) => text,
@@ -161,7 +158,9 @@ async fn fetch_article(
 
   if !found {
     // Fallback: extract from body
-    if let Some(body) = document.select(&Selector::parse("body").unwrap()).next() {
+    if let Some(body) =
+      document.select(&Selector::parse("body").unwrap()).next()
+    {
       text = strip_html(&body.html());
     } else {
       text = strip_html(&html);
@@ -169,10 +168,7 @@ async fn fetch_article(
   }
 
   // Clean up whitespace
-  let text = text
-    .split_whitespace()
-    .collect::<Vec<_>>()
-    .join(" ");
+  let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
   Ok(text)
 }

@@ -40,6 +40,4 @@ target
 
 docs/book
 .env
-
-# Vendored Cargo dependencies (generated in dev shell)
-.cargo/vendor
+.cargo/config.toml

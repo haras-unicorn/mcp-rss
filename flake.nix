@@ -25,8 +25,6 @@
       makePackages =
         pkgs:
         let
-          lib = pkgs.lib;
-
           rust = (inputs.rust-overlay.lib.mkRustBin { } pkgs).stable.latest.default.override {
             extensions = [
               "rustfmt"
@@ -38,15 +36,29 @@
 
           craneLib = crane.mkLib pkgs;
 
-          cargoToml = builtins.fromTOML (builtins.readFile "${self}/src/mcp-rss/Cargo.toml");
+          cargoToml = builtins.fromTOML (builtins.readFile ./src/mcp-rss/Cargo.toml);
+
+          env = {
+            PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+
+          };
+
+          nativeBuildInputs = with pkgs; [
+
+            pkg-config
+            openssl
+          ];
 
           commonArgs = {
+            inherit nativeBuildInputs env;
+            pname = cargoToml.package.name;
+            version = cargoToml.package.version;
             src = craneLib.cleanCargoSource self;
             strictDeps = true;
             cargoExtraArgs = "-p mcp-rss";
           };
 
-          vendorDir = craneLib.cargoVendorDir commonArgs;
+          vendor = craneLib.vendorCargoDeps commonArgs;
 
           unwrapped = craneLib.buildPackage (
             commonArgs
@@ -57,7 +69,13 @@
           );
         in
         {
-          inherit rust unwrapped;
+          inherit
+            rust
+            unwrapped
+            vendor
+            nativeBuildInputs
+            env
+            ;
           package =
             pkgs.callPackage
               (
@@ -187,27 +205,26 @@
 
           packages = makePackages pkgs;
 
-          devScript =
-            pkgs.writeShellApplication {
-              name = "dev";
-              runtimeInputs = external ++ [ packages.rust ];
-              text = ''nu ${devScriptText} "$@"'';
-            };
+          devScript = pkgs.writeShellApplication {
+            name = "dev";
+            runtimeInputs = external ++ [ packages.rust ];
+            text = ''nu ${devScriptText} "$@"'';
+          };
         in
         {
-          devShells =
-            {
-              default = pkgs.mkShell {
-                packages = external ++ [
-                  packages.rust
-                  devScript
-                ];
-                shellHook = ''
-                  # Create a symlink to the vendored dependencies in the dev shell
-                  ln -sf "${vendorDir}" .cargo/vendor
-                '';
-              };
+          devShells = {
+            default = pkgs.mkShell {
+              inherit (packages) nativeBuildInputs env;
+              packages = external ++ [
+                packages.rust
+                devScript
+              ];
+              shellHook = ''
+                mkdir -p .cargo
+                ln -sf "${packages.vendor}/config.toml" .cargo/config.toml
+              '';
             };
+          };
 
           apps =
             let
