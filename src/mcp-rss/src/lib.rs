@@ -11,9 +11,33 @@
 #![deny(clippy::todo)]
 #![deny(clippy::allow_attributes_without_reason)]
 
-use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router, Json};
-use scraper::{Html, Selector};
+use rmcp::{
+  Json, handler::server::wrapper::Parameters, schemars, tool, tool_router,
+};
+use scraper::Html;
 use std::time::Duration;
+
+#[allow(clippy::unwrap_used, reason = "these are all valid selectors")]
+mod selectors {
+  use scraper::Selector;
+
+  lazy_static::lazy_static! {
+    pub static ref BODY_SELECTOR: Selector = Selector::parse("body").unwrap();
+
+    pub static ref CONTENT_SELECTORS: Vec<Selector> = [
+        "article",
+        "main",
+        ".post-content",
+        ".entry-content",
+        ".article-body",
+        "#article-content",
+        ".content",
+        "body",
+      ]
+        .map(|selector| Selector::parse(selector).unwrap())
+        .to_vec();
+  }
+}
 
 /// MCP server that provides RSS tooling.
 #[derive(Debug, Clone)]
@@ -72,7 +96,6 @@ impl RssServer {
     &self,
     Parameters(input): Parameters<GetArticlesInput>,
   ) -> Json<GetArticlesOutput> {
-
     if input.feeds.is_empty() {
       return Json(GetArticlesOutput { urls: vec![] });
     }
@@ -151,7 +174,6 @@ impl RssServer {
     &self,
     Parameters(input): Parameters<FetchArticleInput>,
   ) -> Json<FetchArticleOutput> {
-
     let html = {
       let http = &self.http;
       match http.get(&input.url).send().await {
@@ -173,38 +195,23 @@ impl RssServer {
     let document = Html::parse_document(&html);
 
     // Try common content selectors
-    let content_selectors = [
-      "article",
-      "main",
-      ".post-content",
-      ".entry-content",
-      ".article-body",
-      "#article-content",
-      ".content",
-      "body",
-    ];
-
     let mut text = String::new();
     let mut found = false;
 
-    for selector_str in &content_selectors {
-      if let Ok(selector) = Selector::parse(selector_str) {
-        if let Some(element) = document.select(&selector).next() {
-          let cleaned = strip_html(&element.html());
-          if !cleaned.trim().is_empty() && cleaned.len() > 100 {
-            text = cleaned;
-            found = true;
-            break;
-          }
+    for selector in selectors::CONTENT_SELECTORS.iter() {
+      if let Some(element) = document.select(selector).next() {
+        let cleaned = strip_html(&element.html());
+        if !cleaned.trim().is_empty() && cleaned.len() > 100 {
+          text = cleaned;
+          found = true;
+          break;
         }
       }
     }
 
     if !found {
       // Fallback: extract from body
-      if let Some(body) =
-        document.select(&Selector::parse("body").unwrap()).next()
-      {
+      if let Some(body) = document.select(&selectors::BODY_SELECTOR).next() {
         text = strip_html(&body.html());
       } else {
         text = strip_html(&html);
