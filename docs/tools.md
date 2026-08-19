@@ -4,15 +4,20 @@ The `mcp-rss` server exposes the following tools.
 
 ## `get_articles`
 
-Fetches article URLs from RSS/Atom feeds.
+Fetches articles from RSS/Atom feeds.
 
 - **Parameters**:
   - `feeds` (`Vec<String>`): List of feed URLs to fetch.
   - `time_from` (`Option<String>`): Optional ISO 8601 timestamp. Only articles
     published after this time are returned.
-- **Returns**: A deduplicated list of article URLs (`Vec<String>`).
+- **Returns**: A list of `Article` objects, deduplicated by URL. Each article has:
+  - `link` (`String`): Canonical URL of the article.
+  - `title` (`String`): Article title (empty string if missing).
+  - `id` (`String`): Feed-specific identifier (GUID).
+  - `published` (`Option<String>`): Publication date in RFC 3333 format, or `null`.
+  - `description` (`Option<String>`): Feed-specific summary/description, or `null`.
 - **Notes**: If an article lacks a publication date, it is included regardless
-  of `time_from` filtering.
+  of `time_from` filtering. Articles are deduplicated by link across all feeds.
 
 ## `fetch_article`
 

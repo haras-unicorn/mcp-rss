@@ -69,9 +69,23 @@ struct GetArticlesInput {
 }
 
 #[derive(serde::Serialize, schemars::JsonSchema)]
+struct Article {
+  /// Canonical URL of the article
+  link: String,
+  /// Article title
+  title: String,
+  /// Feed-specific identifier (GUID)
+  id: String,
+  /// Publication date, if available
+  published: Option<String>,
+  /// Feed-specific summary/description
+  description: Option<String>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
 struct GetArticlesOutput {
-  /// List of article URLs
-  urls: Vec<String>,
+  /// List of articles
+  articles: Vec<Article>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -97,7 +111,7 @@ impl RssServer {
     Parameters(input): Parameters<GetArticlesInput>,
   ) -> Json<GetArticlesOutput> {
     if input.feeds.is_empty() {
-      return Json(GetArticlesOutput { urls: vec![] });
+      return Json(GetArticlesOutput { articles: vec![] });
     }
 
     let parsed_time = if let Some(ref iso) = input.time_from {
@@ -112,7 +126,7 @@ impl RssServer {
       None
     };
 
-    let mut urls = Vec::new();
+    let mut articles: Vec<Article> = Vec::new();
 
     for feed_url in input.feeds {
       let feed_content = {
@@ -141,29 +155,40 @@ impl RssServer {
       };
 
       for item in feed.items() {
-        if let Some(link) = item.link() {
-          let published = item
-            .pub_date()
-            .and_then(|d| chrono::DateTime::parse_from_rfc2822(d).ok());
+        let link = item.link().map(|l| l.to_string());
+        let id = item.guid().map(|g| g.value.clone()).unwrap_or_default();
+        let title = item.title().map(|t| t.to_string());
+        let published = item
+          .pub_date()
+          .and_then(|d| chrono::DateTime::parse_from_rfc2822(d).ok());
+        let description = item.description().map(|d| d.to_string());
 
-          let include = match (published, &parsed_time) {
-            (Some(item_date), Some(from_date)) => item_date >= *from_date,
-            (Some(_), None) => true,
-            (None, Some(_)) => true,
-            (None, None) => true,
-          };
+        let include = match (published.as_ref(), &parsed_time) {
+          (Some(item_date), Some(from_date)) => item_date >= from_date,
+          (Some(_), None) => true,
+          (None, Some(_)) => true,
+          (None, None) => true,
+        };
 
-          if include {
-            urls.push(link.to_string());
+        if include {
+          if let Some(link) = link {
+            articles.push(Article {
+              link,
+              title: title.unwrap_or_default(),
+              id,
+              published: published.map(|d| d.to_rfc3339()),
+              description,
+            });
           }
         }
       }
     }
 
+    // Deduplicate by link
     let mut seen = std::collections::HashSet::new();
-    urls.retain(|url| seen.insert(url.clone()));
+    articles.retain(|a| seen.insert(a.link.clone()));
 
-    Json(GetArticlesOutput { urls })
+    Json(GetArticlesOutput { articles })
   }
 
   /// Fetch the content of a single article from a URL.
@@ -271,8 +296,8 @@ mod tests {
     <rss version="2.0">
       <channel>
         <title>Test</title>
-        <item><title>One</title><link>https://example.com/one</link></item>
-        <item><title>Two</title><link>https://example.com/two</link></item>
+        <item><title>One</title><link>https://example.com/one</link><guid>guid-one</guid><description>Summary for one</description></item>
+        <item><title>Two</title><link>https://example.com/two</link><guid>guid-two</guid><description>Summary for two</description></item>
       </channel>
     </rss>"#;
 
@@ -286,11 +311,16 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    let urls = result.0.urls;
+    let articles = &result.0.articles;
 
-    assert_eq!(urls.len(), 2);
-    assert!(urls.contains(&"https://example.com/one".to_string()));
-    assert!(urls.contains(&"https://example.com/two".to_string()));
+    assert_eq!(articles.len(), 2);
+    assert_eq!(articles[0].link, "https://example.com/one");
+    assert_eq!(articles[0].title, "One");
+    assert_eq!(articles[0].id, "guid-one");
+    assert_eq!(articles[0].description, Some("Summary for one".to_string()));
+    assert_eq!(articles[1].link, "https://example.com/two");
+    assert_eq!(articles[1].title, "Two");
+    assert_eq!(articles[1].id, "guid-two");
   }
 
   #[tokio::test]
@@ -302,9 +332,9 @@ mod tests {
     <rss version="2.0">
       <channel>
         <title>Test</title>
-        <item><title>Old</title><link>https://example.com/old</link><pubDate>Mon, 01 Jan 2024 00:00:00 +0000</pubDate></item>
-        <item><title>Recent</title><link>https://example.com/recent</link><pubDate>Fri, 19 Jul 2026 12:00:00 +0000</pubDate></item>
-        <item><title>No Date</title><link>https://example.com/nodeate</link></item>
+        <item><title>Old</title><link>https://example.com/old</link><guid>guid-old</guid><pubDate>Mon, 01 Jan 2024 00:00:00 +0000</pubDate></item>
+        <item><title>Recent</title><link>https://example.com/recent</link><guid>guid-recent</guid><pubDate>Fri, 19 Jul 2026 12:00:00 +0000</pubDate></item>
+        <item><title>No Date</title><link>https://example.com/nodeate</link><guid>guid-nodeate</guid></item>
       </channel>
     </rss>"#;
 
@@ -318,14 +348,18 @@ mod tests {
       time_from: Some("2026-01-01T00:00:00+00:00".to_string()),
     };
     let result = server.get_articles(Parameters(input)).await;
-    let urls = result.0.urls;
+    let articles = &result.0.articles;
 
     // "Old" is before the filter date — excluded
-    assert!(!urls.contains(&"https://example.com/old".to_string()));
+    assert!(articles.iter().find(|a| a.link == "https://example.com/old").is_none());
     // "Recent" is after the filter date — included
-    assert!(urls.contains(&"https://example.com/recent".to_string()));
+    assert!(articles.iter().find(|a| a.link == "https://example.com/recent").is_some());
     // "No Date" has no pubDate — included regardless of filter
-    assert!(urls.contains(&"https://example.com/nodeate".to_string()));
+    assert!(articles.iter().find(|a| a.link == "https://example.com/nodeate").is_some());
+    // All included articles should have correct metadata
+    let recent = articles.iter().find(|a| a.link == "https://example.com/recent").unwrap();
+    assert_eq!(recent.title, "Recent");
+    assert_eq!(recent.id, "guid-recent");
   }
 
   #[tokio::test]
@@ -337,8 +371,8 @@ mod tests {
     <rss version="2.0">
       <channel>
         <title>Test</title>
-        <item><title>A</title><link>https://example.com/a</link></item>
-        <item><title>B</title><link>https://example.com/b</link></item>
+        <item><title>A</title><link>https://example.com/a</link><guid>guid-a</guid></item>
+        <item><title>B</title><link>https://example.com/b</link><guid>guid-b</guid></item>
       </channel>
     </rss>"#;
 
@@ -360,10 +394,9 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    let urls = result.0.urls;
 
     // Each feed has 2 items, but they're the same URLs — should deduplicate to 2
-    assert_eq!(urls.len(), 2);
+    assert_eq!(result.0.articles.len(), 2);
   }
 
   #[tokio::test]
@@ -381,7 +414,7 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    assert!(result.0.urls.is_empty());
+    assert!(result.0.articles.is_empty());
   }
 
   #[tokio::test]
@@ -392,7 +425,7 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    assert!(result.0.urls.is_empty());
+    assert!(result.0.articles.is_empty());
   }
 
   // --- fetch_article ---
