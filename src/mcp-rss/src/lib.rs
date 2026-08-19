@@ -234,13 +234,18 @@ fn strip_html(html: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use wiremock::{Mock, MockServer, ResponseTemplate};
+
+  fn make_server() -> RssServer {
+    RssServer::new().expect("server construction")
+  }
+
+  // --- strip_html (no HTTP needed) ---
 
   #[test]
-  fn test_strip_html() {
+  fn test_strip_html_simple() {
     let input = "<p>Hello <b>world</b></p>";
     let output = strip_html(input);
-    // strip_html now normalizes whitespace within paragraphs
-    // but separates block elements with newlines
     assert!(output.contains("Hello"));
     assert!(output.contains("world"));
   }
@@ -253,5 +258,247 @@ mod tests {
     assert!(output.contains("Some text with"));
     assert!(output.contains("links"));
     assert!(output.contains("spans"));
+  }
+
+  // --- get_articles ---
+
+  #[tokio::test]
+  async fn test_get_articles_basic() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    let rss = r#"<?xml version="1.0"?>
+    <rss version="2.0">
+      <channel>
+        <title>Test</title>
+        <item><title>One</title><link>https://example.com/one</link></item>
+        <item><title>Two</title><link>https://example.com/two</link></item>
+      </channel>
+    </rss>"#;
+
+    Mock::given(wiremock::matchers::path("/feed.xml"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(rss))
+      .mount(&mock_server)
+      .await;
+
+    let input = GetArticlesInput {
+      feeds: vec![format!("{}/feed.xml", mock_server.uri())],
+      time_from: None,
+    };
+    let result = server.get_articles(Parameters(input)).await;
+    let urls = result.urls;
+
+    assert_eq!(urls.len(), 2);
+    assert!(urls.contains(&"https://example.com/one".to_string()));
+    assert!(urls.contains(&"https://example.com/two".to_string()));
+  }
+
+  #[tokio::test]
+  async fn test_get_articles_time_filter() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    let rss = r#"<?xml version="1.0"?>
+    <rss version="2.0">
+      <channel>
+        <title>Test</title>
+        <item><title>Old</title><link>https://example.com/old</link><pubDate>Mon, 01 Jan 2024 00:00:00 +0000</pubDate></item>
+        <item><title>Recent</title><link>https://example.com/recent</link><pubDate>Fri, 19 Jul 2026 12:00:00 +0000</pubDate></item>
+        <item><title>No Date</title><link>https://example.com/nodeate</link></item>
+      </channel>
+    </rss>"#;
+
+    Mock::given(wiremock::matchers::path("/feed.xml"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(rss))
+      .mount(&mock_server)
+      .await;
+
+    let input = GetArticlesInput {
+      feeds: vec![format!("{}/feed.xml", mock_server.uri())],
+      time_from: Some("2026-01-01T00:00:00+00:00".to_string()),
+    };
+    let result = server.get_articles(Parameters(input)).await;
+    let urls = result.urls;
+
+    // "Old" is before the filter date — excluded
+    assert!(!urls.contains(&"https://example.com/old".to_string()));
+    // "Recent" is after the filter date — included
+    assert!(urls.contains(&"https://example.com/recent".to_string()));
+    // "No Date" has no pubDate — included regardless of filter
+    assert!(urls.contains(&"https://example.com/nodeate".to_string()));
+  }
+
+  #[tokio::test]
+  async fn test_get_articles_dedup() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    let rss = r#"<?xml version="1.0"?>
+    <rss version="2.0">
+      <channel>
+        <title>Test</title>
+        <item><title>A</title><link>https://example.com/a</link></item>
+        <item><title>B</title><link>https://example.com/b</link></item>
+      </channel>
+    </rss>"#;
+
+    Mock::given(wiremock::matchers::path("/feed1.xml"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(rss))
+      .mount(&mock_server)
+      .await;
+
+    Mock::given(wiremock::matchers::path("/feed2.xml"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(rss))
+      .mount(&mock_server)
+      .await;
+
+    let input = GetArticlesInput {
+      feeds: vec![
+        format!("{}/feed1.xml", mock_server.uri()),
+        format!("{}/feed2.xml", mock_server.uri()),
+      ],
+      time_from: None,
+    };
+    let result = server.get_articles(Parameters(input)).await;
+    let urls = result.urls;
+
+    // Each feed has 2 items, but they're the same URLs — should deduplicate to 2
+    assert_eq!(urls.len(), 2);
+  }
+
+  #[tokio::test]
+  async fn test_get_articles_invalid_xml() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    Mock::given(wiremock::matchers::path("/bad.xml"))
+      .respond_with(ResponseTemplate::new(200).set_body_string("not xml at all {{{"))
+      .mount(&mock_server)
+      .await;
+
+    let input = GetArticlesInput {
+      feeds: vec![format!("{}/bad.xml", mock_server.uri())],
+      time_from: None,
+    };
+    let result = server.get_articles(Parameters(input)).await;
+    assert!(result.urls.is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_get_articles_empty_feeds() {
+    let server = make_server();
+    let input = GetArticlesInput {
+      feeds: vec![],
+      time_from: None,
+    };
+    let result = server.get_articles(Parameters(input)).await;
+    assert!(result.urls.is_empty());
+  }
+
+  // --- fetch_article ---
+
+  #[tokio::test]
+  async fn test_fetch_article_article_selector() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    let html = r#"<html><body>
+      <nav>Navigation should be ignored</nav>
+      <article><h1>Article Title</h1><p>This is the main article content that should be extracted.</p></article>
+      <footer>Footer should be ignored</footer>
+    </body></html>"#;
+
+    Mock::given(wiremock::matchers::path("/article.html"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(html))
+      .mount(&mock_server)
+      .await;
+
+    let input = FetchArticleInput {
+      url: format!("{}/article.html", mock_server.uri()),
+    };
+    let result = server.fetch_article(Parameters(input)).await;
+
+    assert!(result.content.contains("Article Title"));
+    assert!(result.content.contains("main article content"));
+    assert!(!result.content.contains("Navigation"));
+    assert!(!result.content.contains("Footer"));
+  }
+
+  #[tokio::test]
+  async fn test_fetch_article_class_selector() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    let html = r#"<html><body>
+      <header>Header content</header>
+      <div class="entry-content"><h1>Blog Post</h1><p>Blog post body text here.</p></div>
+    </body></html>"#;
+
+    Mock::given(wiremock::matchers::path("/blog.html"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(html))
+      .mount(&mock_server)
+      .await;
+
+    let input = FetchArticleInput {
+      url: format!("{}/blog.html", mock_server.uri()),
+    };
+    let result = server.fetch_article(Parameters(input)).await;
+
+    assert!(result.content.contains("Blog Post"));
+    assert!(result.content.contains("Blog post body text"));
+    assert!(!result.content.contains("Header content"));
+  }
+
+  #[tokio::test]
+  async fn test_fetch_article_fallback() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    // No article, main, or recognized class — should fall back to body
+    let html = r#"<html><body>
+      <div><p>This is all there is. Just some plain content.</p></div>
+    </body></html>"#;
+
+    Mock::given(wiremock::matchers::path("/plain.html"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(html))
+      .mount(&mock_server)
+      .await;
+
+    let input = FetchArticleInput {
+      url: format!("{}/plain.html", mock_server.uri()),
+    };
+    let result = server.fetch_article(Parameters(input)).await;
+
+    assert!(result.content.contains("all there is"));
+    assert!(result.content.contains("plain content"));
+  }
+
+  #[tokio::test]
+  async fn test_fetch_article_selectors_prioritized() {
+    let server = make_server();
+    let mock_server = MockServer::start().await;
+
+    // Both <article> and .entry-content present — should pick <article> first
+    let html = r#"<!DOCTYPE html>
+    <html>
+    <body>
+      <article><h1>Article Content</h1></article>
+      <div class="entry-content">Entry Content</div>
+    </body>
+    </html>"#;
+
+    Mock::given(wiremock::matchers::path("/multi.html"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(html))
+      .mount(&mock_server)
+      .await;
+
+    let input = FetchArticleInput {
+      url: format!("{}/multi.html", mock_server.uri()),
+    };
+    let result = server.fetch_article(Parameters(input)).await;
+
+    assert!(result.content.contains("Article Content"));
+    // Should NOT contain the .entry-content text since article was matched first
+    assert!(!result.content.contains("Entry Content"));
   }
 }

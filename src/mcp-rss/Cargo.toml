@@ -18,3 +18,6 @@ rss = "2"
 scraper = "0.23"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+wiremock = "0.6"
