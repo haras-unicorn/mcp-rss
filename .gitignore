@@ -40,3 +40,4 @@ target
 
 docs/book
 .env
+.cargo/config.toml

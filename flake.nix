@@ -7,8 +7,7 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
 
-    naersk.url = "github:nix-community/naersk";
-    naersk.inputs.nixpkgs.follows = "nixpkgs";
+    crane.url = "github:ipetkov/crane";
 
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
@@ -19,14 +18,13 @@
       self,
       nixpkgs,
       flake-parts,
+      crane,
       ...
     }@inputs:
     let
       makePackages =
         pkgs:
         let
-          lib = pkgs.lib;
-
           rust = (inputs.rust-overlay.lib.mkRustBin { } pkgs).stable.latest.default.override {
             extensions = [
               "rustfmt"
@@ -35,42 +33,47 @@
               "rust-src"
             ];
           };
-          rustc = rust;
-          cargo = rust;
 
-          naersk' = pkgs.callPackage inputs.naersk {
-            inherit rustc cargo;
+          craneLib = crane.mkLib pkgs;
+
+          cargoToml = builtins.fromTOML (builtins.readFile ./src/mcp-rss/Cargo.toml);
+
+          env = {
+            PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
           };
 
-          unwrapped = naersk'.buildPackage (
-            let
-              cargoToml = builtins.fromTOML (builtins.readFile "${self}/src/mcp-rss/Cargo.toml");
-            in
-            {
-              src = lib.cleanSourceWith {
-                src = self;
-                filter =
-                  path: type:
-                  (lib.hasSuffix ".rs" path)
-                  || (lib.hasSuffix ".toml" path)
-                  || (lib.hasSuffix ".lock" path)
-                  || (type == "directory");
-              };
-              cargoBuildOptions =
-                prev:
-                prev
-                ++ [
-                  "-p"
-                  "mcp-rss"
-                ];
-              name = cargoToml.package.name;
-              version = cargoToml.package.version;
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            openssl
+          ];
+
+          commonArgs = {
+            inherit nativeBuildInputs env;
+            pname = cargoToml.package.name;
+            version = cargoToml.package.version;
+            src = craneLib.cleanCargoSource self;
+            strictDeps = true;
+            cargoExtraArgs = "-p mcp-rss";
+          };
+
+          vendor = craneLib.vendorCargoDeps commonArgs;
+
+          unwrapped = craneLib.buildPackage (
+            commonArgs
+            // {
+              cargoArtifacts = craneLib.buildDepsOnly commonArgs;
               meta.mainProgram = "mcp-rss";
             }
           );
         in
         {
-          inherit rust unwrapped;
+          inherit
+            rust
+            unwrapped
+            vendor
+            nativeBuildInputs
+            env
+            ;
           package =
             pkgs.callPackage
               (
@@ -198,29 +201,28 @@
             }
           '';
 
-          devScript =
-            let
-              packages = makePackages pkgs;
-            in
-            pkgs.writeShellApplication {
-              name = "dev";
-              runtimeInputs = external ++ [ packages.rust ];
-              text = ''nu ${devScriptText} "$@"'';
-            };
+          packages = makePackages pkgs;
+
+          devScript = pkgs.writeShellApplication {
+            name = "dev";
+            runtimeInputs = external ++ [ packages.rust ];
+            text = ''nu ${devScriptText} "$@"'';
+          };
         in
         {
-          devShells =
-            let
-              packages = makePackages pkgs;
-            in
-            {
-              default = pkgs.mkShell {
-                packages = external ++ [
-                  packages.rust
-                  devScript
-                ];
-              };
+          devShells = {
+            default = pkgs.mkShell {
+              inherit (packages) nativeBuildInputs env;
+              packages = external ++ [
+                packages.rust
+                devScript
+              ];
+              shellHook = ''
+                mkdir -p .cargo
+                ln -sf "${packages.vendor}/config.toml" .cargo/config.toml
+              '';
             };
+          };
 
           apps =
             let

@@ -5,4 +5,6 @@ language: en
 ignoreWords:
   - rmcp
   - serde
-  - thiserror
+  - chrono
+  - reqwest
+  - readabilityrs
