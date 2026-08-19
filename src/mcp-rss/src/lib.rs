@@ -286,7 +286,7 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    let urls = result.urls;
+    let urls = result.0.urls;
 
     assert_eq!(urls.len(), 2);
     assert!(urls.contains(&"https://example.com/one".to_string()));
@@ -318,7 +318,7 @@ mod tests {
       time_from: Some("2026-01-01T00:00:00+00:00".to_string()),
     };
     let result = server.get_articles(Parameters(input)).await;
-    let urls = result.urls;
+    let urls = result.0.urls;
 
     // "Old" is before the filter date — excluded
     assert!(!urls.contains(&"https://example.com/old".to_string()));
@@ -360,7 +360,7 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    let urls = result.urls;
+    let urls = result.0.urls;
 
     // Each feed has 2 items, but they're the same URLs — should deduplicate to 2
     assert_eq!(urls.len(), 2);
@@ -381,7 +381,7 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    assert!(result.urls.is_empty());
+    assert!(result.0.urls.is_empty());
   }
 
   #[tokio::test]
@@ -392,7 +392,7 @@ mod tests {
       time_from: None,
     };
     let result = server.get_articles(Parameters(input)).await;
-    assert!(result.urls.is_empty());
+    assert!(result.0.urls.is_empty());
   }
 
   // --- fetch_article ---
@@ -403,9 +403,9 @@ mod tests {
     let mock_server = MockServer::start().await;
 
     let html = r#"<html><body>
-      <nav>Navigation should be ignored</nav>
-      <article><h1>Article Title</h1><p>This is the main article content that should be extracted.</p></article>
-      <footer>Footer should be ignored</footer>
+      <nav>Navigation should be completely ignored and excluded from the output</nav>
+      <article><h1>Article Title</h1><p>This is the main article content that should be extracted from the page. It contains enough text to pass the length threshold check and should be properly selected over the body element and all other content on the page.</p></article>
+      <footer>Footer should be completely ignored and excluded from the output as well</footer>
     </body></html>"#;
 
     Mock::given(wiremock::matchers::path("/article.html"))
@@ -418,10 +418,10 @@ mod tests {
     };
     let result = server.fetch_article(Parameters(input)).await;
 
-    assert!(result.content.contains("Article Title"));
-    assert!(result.content.contains("main article content"));
-    assert!(!result.content.contains("Navigation"));
-    assert!(!result.content.contains("Footer"));
+    assert!(result.0.content.contains("Article Title"));
+    assert!(result.0.content.contains("main article content"));
+    assert!(!result.0.content.contains("Navigation"));
+    assert!(!result.0.content.contains("Footer"));
   }
 
   #[tokio::test]
@@ -430,8 +430,8 @@ mod tests {
     let mock_server = MockServer::start().await;
 
     let html = r#"<html><body>
-      <header>Header content</header>
-      <div class="entry-content"><h1>Blog Post</h1><p>Blog post body text here.</p></div>
+      <header>Header content should be completely ignored and not included in the extracted text</header>
+      <div class="entry-content"><h1>Blog Post</h1><p>Blog post body text here. This is a longer paragraph that contains enough text to pass the length threshold and will be properly extracted by the selector matching logic.</p></div>
     </body></html>"#;
 
     Mock::given(wiremock::matchers::path("/blog.html"))
@@ -444,9 +444,9 @@ mod tests {
     };
     let result = server.fetch_article(Parameters(input)).await;
 
-    assert!(result.content.contains("Blog Post"));
-    assert!(result.content.contains("Blog post body text"));
-    assert!(!result.content.contains("Header content"));
+    assert!(result.0.content.contains("Blog Post"));
+    assert!(result.0.content.contains("Blog post body text"));
+    assert!(!result.0.content.contains("Header content"));
   }
 
   #[tokio::test]
@@ -469,8 +469,8 @@ mod tests {
     };
     let result = server.fetch_article(Parameters(input)).await;
 
-    assert!(result.content.contains("all there is"));
-    assert!(result.content.contains("plain content"));
+    assert!(result.0.content.contains("all there is"));
+    assert!(result.0.content.contains("plain content"));
   }
 
   #[tokio::test]
@@ -482,8 +482,8 @@ mod tests {
     let html = r#"<!DOCTYPE html>
     <html>
     <body>
-      <article><h1>Article Content</h1></article>
-      <div class="entry-content">Entry Content</div>
+      <article><h1>Article Content</h1><p>This is a longer paragraph with enough text to pass the length threshold check properly for article content extraction.</p></article>
+      <div class="entry-content">Entry Content should not be included since article was matched first</div>
     </body>
     </html>"#;
 
@@ -497,8 +497,8 @@ mod tests {
     };
     let result = server.fetch_article(Parameters(input)).await;
 
-    assert!(result.content.contains("Article Content"));
+    assert!(result.0.content.contains("Article Content"));
     // Should NOT contain the .entry-content text since article was matched first
-    assert!(!result.content.contains("Entry Content"));
+    assert!(!result.0.content.contains("Entry Content"));
   }
 }
