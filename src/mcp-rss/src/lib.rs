@@ -105,7 +105,10 @@ impl RssServer {
   /// Get articles from RSS/Atom feeds, optionally filtered by publication date.
   ///
   /// Returns a list of article URLs (links) from the specified feeds.
-  #[tool(name = "get_articles", description = "Get articles from RSS/Atom feeds, optionally filtered by publication date.")]
+  #[tool(
+    name = "get_articles",
+    description = "Get articles from RSS/Atom feeds, optionally filtered by publication date."
+  )]
   async fn get_articles(
     &self,
     Parameters(input): Parameters<GetArticlesInput>,
@@ -170,8 +173,8 @@ impl RssServer {
           (None, None) => true,
         };
 
-        if include {
-          if let Some(link) = link {
+        if include
+          && let Some(link) = link {
             articles.push(Article {
               link,
               title: title.unwrap_or_default(),
@@ -180,7 +183,6 @@ impl RssServer {
               description,
             });
           }
-        }
       }
     }
 
@@ -194,7 +196,10 @@ impl RssServer {
   /// Fetch the content of a single article from a URL.
   ///
   /// Returns cleaned text content extracted from the HTML page.
-  #[tool(name = "fetch_article", description = "Fetch the content of a single article from a URL.")]
+  #[tool(
+    name = "fetch_article",
+    description = "Fetch the content of a single article from a URL."
+  )]
   async fn fetch_article(
     &self,
     Parameters(input): Parameters<FetchArticleInput>,
@@ -206,12 +211,16 @@ impl RssServer {
           Ok(text) => text,
           Err(e) => {
             eprintln!("Failed to fetch {}: {}", input.url, e);
-            return Json(FetchArticleOutput { content: format!("Failed to fetch: {e}") });
+            return Json(FetchArticleOutput {
+              content: format!("Failed to fetch: {e}"),
+            });
           }
         },
         Err(e) => {
           eprintln!("Failed to connect to {}: {}", input.url, e);
-          return Json(FetchArticleOutput { content: format!("Failed to connect: {e}") });
+          return Json(FetchArticleOutput {
+            content: format!("Failed to connect: {e}"),
+          });
         }
       }
     };
@@ -351,13 +360,31 @@ mod tests {
     let articles = &result.0.articles;
 
     // "Old" is before the filter date — excluded
-    assert!(articles.iter().find(|a| a.link == "https://example.com/old").is_none());
+    assert!(
+      articles
+        .iter()
+        .find(|a| a.link == "https://example.com/old")
+        .is_none()
+    );
     // "Recent" is after the filter date — included
-    assert!(articles.iter().find(|a| a.link == "https://example.com/recent").is_some());
+    assert!(
+      articles
+        .iter()
+        .find(|a| a.link == "https://example.com/recent")
+        .is_some()
+    );
     // "No Date" has no pubDate — included regardless of filter
-    assert!(articles.iter().find(|a| a.link == "https://example.com/nodeate").is_some());
+    assert!(
+      articles
+        .iter()
+        .find(|a| a.link == "https://example.com/nodeate")
+        .is_some()
+    );
     // All included articles should have correct metadata
-    let recent = articles.iter().find(|a| a.link == "https://example.com/recent").unwrap();
+    let recent = articles
+      .iter()
+      .find(|a| a.link == "https://example.com/recent")
+      .unwrap();
     assert_eq!(recent.title, "Recent");
     assert_eq!(recent.id, "guid-recent");
   }
@@ -405,7 +432,9 @@ mod tests {
     let mock_server = MockServer::start().await;
 
     Mock::given(wiremock::matchers::path("/bad.xml"))
-      .respond_with(ResponseTemplate::new(200).set_body_string("not xml at all {{{"))
+      .respond_with(
+        ResponseTemplate::new(200).set_body_string("not xml at all {{{"),
+      )
       .mount(&mock_server)
       .await;
 
