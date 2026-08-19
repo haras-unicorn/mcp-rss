@@ -11,7 +11,7 @@
 #![deny(clippy::todo)]
 #![deny(clippy::allow_attributes_without_reason)]
 
-use rmcp::{handler::server::wrapper::Parameters, schemars, tool};
+use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router, Json};
 use scraper::{Html, Selector};
 use std::time::Duration;
 
@@ -36,42 +36,54 @@ impl RssServer {
   }
 }
 
-/// Parameters for the `get_articles` tool
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct GetArticlesParams {
-  /// List of feeds to get articles from
+#[derive(serde::Deserialize, schemars::JsonSchema, Default)]
+struct GetArticlesInput {
+  /// List of RSS/Atom feed URLs to fetch articles from
   feeds: Vec<String>,
-
-  /// If provided, only articles published after this time will be returned
+  /// If provided, only articles published after this time will be returned (ISO 8601 format)
   time_from: Option<String>,
 }
 
-/// Parameters for the `fetch_article` tool
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct FetchArticleParams {
-  /// URL to fetch the article from
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct GetArticlesOutput {
+  /// List of article URLs
+  urls: Vec<String>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct FetchArticleInput {
+  /// URL of the article to fetch
   url: String,
 }
 
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct FetchArticleOutput {
+  /// Cleaned text content of the article
+  content: String,
+}
+
+#[tool_router(server_handler)]
 impl RssServer {
   /// Get articles from RSS/Atom feeds, optionally filtered by publication date.
   ///
   /// Returns a list of article URLs (links) from the specified feeds.
-  #[tool]
+  #[tool(name = "get_articles", description = "Get articles from RSS/Atom feeds, optionally filtered by publication date.")]
   async fn get_articles(
     &self,
-    Parameters(params): Parameters<GetArticlesParams>,
-  ) -> Result<Vec<String>, String> {
-    let GetArticlesParams { feeds, time_from } = params;
+    Parameters(input): Parameters<GetArticlesInput>,
+  ) -> Json<GetArticlesOutput> {
 
-    if feeds.is_empty() {
-      return Err("No feeds specified".into());
+    if input.feeds.is_empty() {
+      return Json(GetArticlesOutput { urls: vec![] });
     }
 
-    let parsed_time = if let Some(ref iso) = time_from {
+    let parsed_time = if let Some(ref iso) = input.time_from {
       match chrono::DateTime::parse_from_rfc3339(iso) {
         Ok(dt) => Some(dt),
-        Err(e) => return Err(format!("Invalid ISO 8601 timestamp: {e}")),
+        Err(e) => {
+          eprintln!("Invalid ISO 8601 timestamp: {e}");
+          None
+        }
       }
     } else {
       None
@@ -79,7 +91,7 @@ impl RssServer {
 
     let mut urls = Vec::new();
 
-    for feed_url in feeds {
+    for feed_url in input.feeds {
       let feed_content = {
         let http = &self.http;
         match http.get(&feed_url).send().await {
@@ -114,7 +126,7 @@ impl RssServer {
           let include = match (published, &parsed_time) {
             (Some(item_date), Some(from_date)) => item_date >= *from_date,
             (Some(_), None) => true,
-            (None, Some(_)) => true, // include items with no date if filtering
+            (None, Some(_)) => true,
             (None, None) => true,
           };
 
@@ -128,27 +140,32 @@ impl RssServer {
     let mut seen = std::collections::HashSet::new();
     urls.retain(|url| seen.insert(url.clone()));
 
-    Ok(urls)
+    Json(GetArticlesOutput { urls })
   }
 
   /// Fetch the content of a single article from a URL.
   ///
   /// Returns cleaned text content extracted from the HTML page.
-  #[tool]
+  #[tool(name = "fetch_article", description = "Fetch the content of a single article from a URL.")]
   async fn fetch_article(
     &self,
-    Parameters(params): Parameters<FetchArticleParams>,
-  ) -> Result<String, String> {
-    let FetchArticleParams { url } = params;
+    Parameters(input): Parameters<FetchArticleInput>,
+  ) -> Json<FetchArticleOutput> {
 
     let html = {
       let http = &self.http;
-      match http.get(&url).send().await {
+      match http.get(&input.url).send().await {
         Ok(resp) => match resp.text().await {
           Ok(text) => text,
-          Err(e) => return Err(format!("Failed to fetch {}: {}", url, e)),
+          Err(e) => {
+            eprintln!("Failed to fetch {}: {}", input.url, e);
+            return Json(FetchArticleOutput { content: format!("Failed to fetch: {e}") });
+          }
         },
-        Err(e) => return Err(format!("Failed to connect to {}: {}", url, e)),
+        Err(e) => {
+          eprintln!("Failed to connect to {}: {}", input.url, e);
+          return Json(FetchArticleOutput { content: format!("Failed to connect: {e}") });
+        }
       }
     };
 
@@ -197,7 +214,7 @@ impl RssServer {
     // Clean up whitespace
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    Ok(text)
+    Json(FetchArticleOutput { content: text })
   }
 }
 
