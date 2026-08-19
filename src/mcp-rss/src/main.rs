@@ -15,7 +15,7 @@ use rmcp::transport::stdio;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-  let service = RssServer.serve(stdio()).await?;
+  let service = RssServer::default().serve(stdio()).await?;
   service.waiting().await?;
   Ok(())
 }
