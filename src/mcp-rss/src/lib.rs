@@ -21,15 +21,18 @@ pub struct RssServer {
   http: reqwest::Client,
 }
 
-impl Default for RssServer {
-  fn default() -> Self {
-    Self {
+impl RssServer {
+  pub fn new() -> anyhow::Result<Self> {
+    Ok(Self {
       http: reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent("mcp-rss/0.1.0")
-        .build()
-        .expect("failed to build HTTP client"),
-    }
+        .user_agent(format!(
+          "{}/{}",
+          env!("CARGO_PKG_NAME"),
+          env!("CARGO_PKG_VERSION")
+        ))
+        .build()?,
+    })
   }
 }
 
