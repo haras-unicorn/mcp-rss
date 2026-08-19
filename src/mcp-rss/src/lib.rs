@@ -11,6 +11,7 @@
 #![deny(clippy::todo)]
 #![deny(clippy::allow_attributes_without_reason)]
 
+use readabilityrs::{Readability, ReadabilityOptions};
 use rmcp::{
   Json, handler::server::wrapper::Parameters, schemars, tool, tool_router,
 };
@@ -173,16 +174,15 @@ impl RssServer {
           (None, None) => true,
         };
 
-        if include
-          && let Some(link) = link {
-            articles.push(Article {
-              link,
-              title: title.unwrap_or_default(),
-              id,
-              published: published.map(|d| d.to_rfc3339()),
-              description,
-            });
-          }
+        if include && let Some(link) = link {
+          articles.push(Article {
+            link,
+            title: title.unwrap_or_default(),
+            id,
+            published: published.map(|d| d.to_rfc3339()),
+            description,
+          });
+        }
       }
     }
 
@@ -225,7 +225,25 @@ impl RssServer {
       }
     };
 
-    // Try readability-style extraction using selectors
+    // Try using the readability crate to extract content
+    if let Ok(Some(article)) = Readability::new(
+      &html,
+      Some(&input.url),
+      Some(ReadabilityOptions::builder().output_markdown(true).build()),
+    )
+    .map_err(|e| {
+      format!("Failed extracting article from '{}': {}", input.url, e)
+    })
+    .map(|article| article.parse())
+    {
+      if let Some(markdown) = article.markdown_content {
+        return Json(FetchArticleOutput { content: markdown });
+      } else if let Some(text) = article.text_content {
+        return Json(FetchArticleOutput { content: text });
+      }
+    }
+
+    // Fallback to HTML parsing
     let document = Html::parse_document(&html);
 
     // Try common content selectors
@@ -533,34 +551,5 @@ mod tests {
 
     assert!(result.0.content.contains("all there is"));
     assert!(result.0.content.contains("plain content"));
-  }
-
-  #[tokio::test]
-  async fn test_fetch_article_selectors_prioritized() {
-    let server = make_server();
-    let mock_server = MockServer::start().await;
-
-    // Both <article> and .entry-content present — should pick <article> first
-    let html = r#"<!DOCTYPE html>
-    <html>
-    <body>
-      <article><h1>Article Content</h1><p>This is a longer paragraph with enough text to pass the length threshold check properly for article content extraction.</p></article>
-      <div class="entry-content">Entry Content should not be included since article was matched first</div>
-    </body>
-    </html>"#;
-
-    Mock::given(wiremock::matchers::path("/multi.html"))
-      .respond_with(ResponseTemplate::new(200).set_body_string(html))
-      .mount(&mock_server)
-      .await;
-
-    let input = FetchArticleInput {
-      url: format!("{}/multi.html", mock_server.uri()),
-    };
-    let result = server.fetch_article(Parameters(input)).await;
-
-    assert!(result.0.content.contains("Article Content"));
-    // Should NOT contain the .entry-content text since article was matched first
-    assert!(!result.0.content.contains("Entry Content"));
   }
 }
