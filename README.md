@@ -1,4 +1,4 @@
-# MCP Nix
+# MCP RSS
 
 <!-- ANCHOR: body -->
 
