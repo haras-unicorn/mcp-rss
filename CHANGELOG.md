@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/haras-unicorn/mcp-rss/compare/v0.2.0...v0.2.1) - 2026-08-26
+
+### Added
+
+- allowed domains env ([#8](https://github.com/haras-unicorn/mcp-rss/pull/8))
+
+### Fixed
+
+- return actual errors ([#7](https://github.com/haras-unicorn/mcp-rss/pull/7))
+- *(readme)* change leftover title ([#5](https://github.com/haras-unicorn/mcp-rss/pull/5))
+
 ## [0.2.0](https://github.com/haras-unicorn/mcp-rss/compare/v0.1.0...v0.2.0) - 2026-08-19
 
 ### Added
