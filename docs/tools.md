@@ -21,6 +21,8 @@ Fetches articles from RSS/Atom feeds.
     `null`.
 - **Notes**: If an article lacks a publication date, it is included regardless
   of `time_from` filtering. Articles are deduplicated by link across all feeds.
+  `get_articles` is never subject to `MCP_RSS_ALLOWED_DOMAINS` — feeds may be
+  fetched from any host.
 
 ## `fetch_article`
 
@@ -32,3 +34,10 @@ Fetches and cleans the text content of a single article from a URL.
 - **Notes**: Uses a cascade of CSS selectors (`article`, `main`,
   `.post-content`, etc.) to extract the main content. Falls back to the full
   `<body>` if no specific content block is found.
+- - **Domain restriction**: If the `MCP_RSS_ALLOWED_DOMAINS` environment
+    variable is set to a comma-separated list of domains, `fetch_article` only
+    accepts URLs whose hostname is in that list. An entry matches its own host
+    and any of its subdomains (e.g. `index.hr` also allows `www.index.hr`). The
+    comparison is case-insensitive and surrounding whitespace around each entry
+    is ignored. When unset, any URL may be fetched. See
+    [Restricting article fetching](./introduction.md#restricting-article-fetching).

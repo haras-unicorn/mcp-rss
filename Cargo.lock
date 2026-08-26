@@ -1008,6 +1008,7 @@ dependencies = [
  "scraper",
  "serde",
  "tokio",
+ "url",
  "wiremock",
 ]
 

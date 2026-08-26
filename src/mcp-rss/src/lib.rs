@@ -41,14 +41,27 @@ mod selectors {
   }
 }
 
+/// Domain that an article-fetching request must belong to when
+/// `MCP_RSS_ALLOWED_DOMAINS` is set.
+const ARTICLE_DOMAINS_ENV: &str = "MCP_RSS_ALLOWED_DOMAINS";
+
 /// MCP server that provides RSS tooling.
 #[derive(Debug, Clone)]
 pub struct RssServer {
   http: reqwest::Client,
+  allowed_article_domains: Option<std::collections::HashSet<String>>,
 }
 
 impl RssServer {
   pub fn new() -> anyhow::Result<Self> {
+    let allowed_article_domains =
+      parse_allowed_domains(std::env::var(ARTICLE_DOMAINS_ENV).ok());
+    Self::with_allowed_article_domains(allowed_article_domains)
+  }
+
+  fn with_allowed_article_domains(
+    allowed_article_domains: Option<std::collections::HashSet<String>>,
+  ) -> anyhow::Result<Self> {
     Ok(Self {
       http: reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -58,8 +71,41 @@ impl RssServer {
           env!("CARGO_PKG_VERSION")
         ))
         .build()?,
+      allowed_article_domains,
     })
   }
+}
+
+/// Parse the value of `MCP_RSS_ALLOWED_DOMAINS` (comma-separated domains) into
+/// a lower-cased set. Returns `None` when the variable is unset or empty, in
+/// which case no restriction is enforced.
+fn parse_allowed_domains(
+  value: Option<String>,
+) -> Option<std::collections::HashSet<String>> {
+  value.and_then(|v| {
+    let domains: std::collections::HashSet<String> = v
+      .split(',')
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .map(str::to_ascii_lowercase)
+      .collect();
+    (!domains.is_empty()).then_some(domains)
+  })
+}
+
+/// Whether a (lower-cased) host matches any entry in `allowed`, either exactly
+/// or as a suffix, so that an entry like `index.hr` also allows `www.index.hr`
+/// and other subdomains of it. Returns `false` when `allowed` is empty.
+fn host_is_allowed(
+  host: &str,
+  allowed: &std::collections::HashSet<String>,
+) -> bool {
+  allowed.iter().any(|domain| {
+    host == domain
+      || host
+        .strip_suffix(domain)
+        .is_some_and(|rest| rest.ends_with('.'))
+  })
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema, Default)]
@@ -220,6 +266,26 @@ impl RssServer {
       return Err(ErrorData::invalid_params("no URL provided", None));
     }
 
+    if let Some(ref allowed) = self.allowed_article_domains {
+      let host = url::Url::parse(&input.url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+        .ok_or_else(|| {
+          ErrorData::invalid_params(
+            format!("could not parse URL {url}", url = input.url),
+            None,
+          )
+        })?;
+      if !host_is_allowed(&host, allowed) {
+        return Err(ErrorData::invalid_params(
+          format!(
+            "domain '{host}' is not in MCP_RSS_ALLOWED_DOMAINS; refusing to fetch article"
+          ),
+          None,
+        ));
+      }
+    }
+
     let html = {
       let http = &self.http;
       match http.get(&input.url).send().await {
@@ -316,7 +382,54 @@ mod tests {
     RssServer::new().expect("server construction")
   }
 
+  fn make_server_with_domains(domains: &[&str]) -> RssServer {
+    let set: std::collections::HashSet<String> =
+      domains.iter().map(|d| d.to_ascii_lowercase()).collect();
+    RssServer::with_allowed_article_domains((!set.is_empty()).then_some(set))
+      .expect("server construction")
+  }
+
   // --- strip_html (no HTTP needed) ---
+
+  #[test]
+  fn test_parse_allowed_domains_trims_and_lowercases() {
+    let parsed =
+      parse_allowed_domains(Some("  Example.COM , www.foo.org".to_string()))
+        .expect("non-empty list");
+    assert!(parsed.contains("example.com"));
+    assert!(parsed.contains("www.foo.org"));
+    assert_eq!(parsed.len(), 2);
+  }
+
+  #[test]
+  fn test_host_is_allowed_exact_match() {
+    let allowed: std::collections::HashSet<String> =
+      ["example.com", "news.example.org"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    assert!(host_is_allowed("example.com", &allowed));
+  }
+
+  #[test]
+  fn test_host_is_allowed_subdomain() {
+    // An allowlisted domain matches itself and any of its subdomains.
+    let allowed: std::collections::HashSet<String> =
+      ["example.com"].iter().map(|d| d.to_string()).collect();
+    assert!(host_is_allowed("example.com", &allowed));
+    assert!(host_is_allowed("www.example.com", &allowed));
+    assert!(host_is_allowed("a.b.example.com", &allowed));
+    // A similarly-suffixed but unrelated host must not match.
+    assert!(!host_is_allowed("not-example.com", &allowed));
+    assert!(!host_is_allowed("evil-example.com", &allowed));
+  }
+
+  #[test]
+  fn test_host_is_allowed_empty() {
+    let allowed: std::collections::HashSet<String> =
+      std::collections::HashSet::new();
+    assert!(!host_is_allowed("example.com", &allowed));
+  }
 
   #[test]
   fn test_strip_html_simple() {
@@ -600,5 +713,109 @@ mod tests {
 
     assert!(result.0.content.contains("all there is"));
     assert!(result.0.content.contains("plain content"));
+  }
+
+  #[tokio::test]
+  async fn test_fetch_article_blocked_domain() {
+    // Server restricted to example.com, but the article lives on the mock
+    // server (127.0.0.1) — the request must be refused without hitting the
+    // network.
+    let server = make_server_with_domains(&["example.com"]);
+    let mock_server = MockServer::start().await;
+
+    let html = r#"<html><body><p>Should never be fetched.</p></body></html>"#;
+    Mock::given(wiremock::matchers::path("/article.html"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(html))
+      .mount(&mock_server)
+      .await;
+
+    let input = FetchArticleInput {
+      url: format!("{}/article.html", mock_server.uri()),
+    };
+    let result = server.fetch_article(Parameters(input)).await;
+    let Err(error) = result else {
+      panic!("fetch_article should refuse a disallowed domain");
+    };
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert!(
+      error.message.contains("MCP_RSS_ALLOWED_DOMAINS"),
+      "message should reference the env var: {error}"
+    );
+
+    // No HTTP request should have been made.
+    let received = mock_server
+      .received_requests()
+      .await
+      .expect("received requests");
+    assert_eq!(received.len(), 0);
+  }
+
+  #[tokio::test]
+  async fn test_fetch_article_blocked_ipv6_style() {
+    // The allowlist is matched case-insensitively and trims whitespace.
+    let server = make_server_with_domains(&["  Example.COM "]);
+    let mock_server = MockServer::start().await;
+
+    let input = FetchArticleInput {
+      url: format!("{}/article.html", mock_server.uri()),
+    };
+    let result = server.fetch_article(Parameters(input)).await;
+    let Err(error) = result else {
+      panic!("fetch_article should refuse a disallowed domain");
+    };
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+  }
+
+  #[tokio::test]
+  async fn test_fetch_article_allowed_domain() {
+    // "127.0.0.1" is the host of the wiremock server — it must be fetched OK.
+    let server = make_server_with_domains(&["127.0.0.1"]);
+    let mock_server = MockServer::start().await;
+
+    let html = r#"<html><body><article><h1>Title</h1><p>This is permitted content with enough words to pass the length threshold for extraction correctly.</p></article></body></html>"#;
+    Mock::given(wiremock::matchers::path("/allowed.html"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(html))
+      .mount(&mock_server)
+      .await;
+
+    let input = FetchArticleInput {
+      url: format!("{}/allowed.html", mock_server.uri()),
+    };
+    let result = server
+      .fetch_article(Parameters(input))
+      .await
+      .expect("fetch_article should succeed for an allowed domain");
+    assert!(result.0.content.contains("Title"));
+  }
+
+  #[tokio::test]
+  async fn test_get_articles_unrestricted_by_domains() {
+    // Domain allowlisting only applies to fetch_article; get_articles must be
+    // able to read feeds from any host.
+    let server = make_server_with_domains(&["example.com"]);
+    let mock_server = MockServer::start().await;
+
+    let rss = r#"<?xml version="1.0"?>
+    <rss version="2.0">
+      <channel>
+        <title>Test</title>
+        <item><title>Feed Item</title><link>https://example.com/x</link><guid>guid</guid></item>
+      </channel>
+    </rss>"#;
+
+    Mock::given(wiremock::matchers::path("/feed.xml"))
+      .respond_with(ResponseTemplate::new(200).set_body_string(rss))
+      .mount(&mock_server)
+      .await;
+
+    let input = GetArticlesInput {
+      feeds: vec![format!("{}/feed.xml", mock_server.uri())],
+      time_from: None,
+    };
+    let result = server
+      .get_articles(Parameters(input))
+      .await
+      .expect("get_articles should ignore domain allowlisting");
+    assert_eq!(result.0.articles.len(), 1);
   }
 }

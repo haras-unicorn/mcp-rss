@@ -124,6 +124,22 @@ instead:
 }
 ```
 
+### Restricting article fetching
+
+By default `fetch_article` can fetch content from any URL. To restrict it to a
+set of allowed hosts, set the `MCP_RSS_ALLOWED_DOMAINS` environment variable to
+a comma-separated list of domains:
+
+```sh
+MCP_RSS_ALLOWED_DOMAINS="example.com,news.example.org" mcp-rss
+```
+
+When set, `fetch_article` refuses URLs whose hostname is not listed. An entry
+matches its own host and any of its subdomains (e.g. `index.hr` also allows
+`www.index.hr`). Domains are compared case-insensitively and whitespace around
+each entry is ignored. `get_articles` is never restricted — fetching feeds is
+always allowed.
+
 <!-- ANCHOR_END: body -->
 
 ## Documentation
